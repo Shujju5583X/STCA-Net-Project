@@ -132,8 +132,9 @@ def compute_frequency_score(pil_image):
             score += 0.4
         elif high_energy < 0.08:
             score += 0.2
-        elif high_energy > 0.15:
-            score -= 0.2  # Very noisy = likely real photo
+            
+        # Removed the penalty for high energy, as modern diffusion models (like Midjourney/Gemini) 
+        # can produce exceptionally sharp images, causing false negatives.
         
         if slope < -0.08:
             score += 0.3
@@ -219,16 +220,45 @@ def detect_non_photographic(pil_image):
         return False, 0.0
 
 
+def check_ai_signatures(image_path, pil_image):
+    """
+    Check filename and image metadata for obvious AI generation signatures.
+    Many modern generators leave EXIF data, software tags, or recognizable filenames.
+    """
+    try:
+        # 1. Check filename
+        basename = os.path.basename(image_path).lower()
+        ai_keywords = ['gemini_generated', 'dall_e', 'dalle', 'midjourney', 'stable_diffusion', 'ai_generated', 'journey']
+        if any(k in basename for k in ai_keywords):
+            return 1.0, "AI signature found in filename."
+            
+        # 2. Check metadata / EXIF
+        info_str = str(pil_image.info).lower()
+        if 'google' in info_str and 'gemini' in info_str:
+            return 1.0, "AI signature found in metadata (Gemini)."
+        elif 'dall-e' in info_str or 'midjourney' in info_str or 'stable diffusion' in info_str:
+            return 1.0, "AI generation software found in metadata."
+            
+    except Exception as e:
+        logger.warning(f"Signature check failed: {e}")
+        pass
+        
+    return 0.0, ""
+
+
 def predict_image(model, image_path, device='cpu'):
     """
     Predicts whether a single image is REAL or FAKE using the given STCA-Net model.
-    Combines neural network prediction with frequency-domain analysis.
+    Combines neural network prediction with frequency-domain analysis and signature checks.
     """
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"Image not found at {image_path}")
         
     try:
         img = Image.open(image_path).convert('RGB')
+        
+        # Check for obvious AI signatures (Watermark/Metadata/Filename)
+        sig_score, sig_reason = check_ai_signatures(image_path, img)
         
         # Check for non-photographic content (anime, cartoon, etc.)
         is_non_photo, non_photo_score = detect_non_photographic(img)
@@ -254,21 +284,27 @@ def predict_image(model, image_path, device='cpu'):
             nn_real_prob = probabilities[1].item()
         
         # ============================================================
-        # COMBINED SCORING: Blend neural network + frequency analysis
+        # COMBINED SCORING: Blend neural network + frequency analysis + signatures
         # ============================================================
-        # Neural network weight: 0.7, Frequency analysis weight: 0.3
-        nn_weight = 0.70
-        freq_weight = 0.30
         
-        # freq_score is 0=real, 1=AI-generated → treat as fake probability
-        combined_fake_prob = (nn_fake_prob * nn_weight) + (freq_score * freq_weight)
-        combined_real_prob = (nn_real_prob * nn_weight) + ((1 - freq_score) * freq_weight)
-        
-        # Normalize
-        total = combined_fake_prob + combined_real_prob
-        combined_fake_prob /= total
-        combined_real_prob /= total
-        
+        if sig_score == 1.0:
+            # If an explicit AI signature is found, override the prediction
+            combined_fake_prob = 0.95
+            combined_real_prob = 0.05
+        else:
+            # Neural network weight: 0.7, Frequency analysis weight: 0.3
+            nn_weight = 0.70
+            freq_weight = 0.30
+            
+            # freq_score is 0=real, 1=AI-generated → treat as fake probability
+            combined_fake_prob = (nn_fake_prob * nn_weight) + (freq_score * freq_weight)
+            combined_real_prob = (nn_real_prob * nn_weight) + ((1 - freq_score) * freq_weight)
+            
+            # Normalize
+            total = combined_fake_prob + combined_real_prob
+            combined_fake_prob /= total
+            combined_real_prob /= total
+            
         fake_prob = combined_fake_prob * 100
         real_prob = combined_real_prob * 100
         
@@ -283,6 +319,8 @@ def predict_image(model, image_path, device='cpu'):
             'attention_map': attn_weights.cpu().numpy(),
             'face_detected': face_found,
             'frequency_score': round(freq_score * 100, 2),
+            'signature_found': sig_score == 1.0,
+            'signature_reason': sig_reason
         }
         
         # Add non-photographic warning if detected
@@ -298,7 +336,7 @@ def predict_image(model, image_path, device='cpu'):
         logger.info(
             f"Image prediction: {prediction} ({confidence:.1f}%) | "
             f"NN: fake={nn_fake_prob:.3f} real={nn_real_prob:.3f} | "
-            f"Freq: {freq_score:.3f} | Face: {face_found} | NonPhoto: {is_non_photo}"
+            f"Freq: {freq_score:.3f} | Sig: {sig_score} | Face: {face_found} | NonPhoto: {is_non_photo}"
         )
         
         return result
