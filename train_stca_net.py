@@ -1,4 +1,5 @@
 import os
+import io
 import argparse
 import time
 import json
@@ -46,7 +47,6 @@ class JPEGCompression:
 
     def __call__(self, img):
         if random.random() < 0.3:
-            import io
             quality = random.randint(*self.quality_range)
             buffer = io.BytesIO()
             img.save(buffer, format='JPEG', quality=quality)
@@ -127,6 +127,10 @@ class SimpleDeepfakeDataset(Dataset):
     def __len__(self):
         return len(self.samples)
         
+    def set_transform(self, transform):
+        """Override transform (used to apply val_transform to validation split)."""
+        self.transform = transform
+
     def __getitem__(self, idx):
         img_path, label = self.samples[idx]
         try:
@@ -135,9 +139,9 @@ class SimpleDeepfakeDataset(Dataset):
                 image = self.transform(image)
             return image, label
         except Exception as e:
-            # Return a blank tensor and the label if image is corrupted
+            # Skip corrupted images instead of returning blank tensors
             print(f"Error loading {img_path}: {e}")
-            return torch.zeros((3, 224, 224)), label
+            raise RuntimeError(f"Corrupted image: {img_path}")
 
 
 def get_transforms():
@@ -335,26 +339,53 @@ if __name__ == '__main__':
     
     max_samples = args.samples if args.samples > 0 else None
     print(f"Loading dataset from: {args.dataset} (Max {max_samples or 'ALL'} samples)...")
-    dataset = SimpleDeepfakeDataset(args.dataset, transform=train_transform, max_samples=max_samples)
     
-    if len(dataset) == 0:
+    # Create separate datasets for train/val with appropriate transforms
+    train_dataset_full = SimpleDeepfakeDataset(args.dataset, transform=train_transform, max_samples=max_samples)
+    
+    if len(train_dataset_full) == 0:
         print("Error: Dataset is empty. Check your paths.")
         exit(1)
     
     # Count class distribution
-    fake_count = sum(1 for _, label in dataset.samples if label == 0)
-    real_count = sum(1 for _, label in dataset.samples if label == 1)
-    print(f"Loaded {len(dataset)} images (Fake: {fake_count}, Real: {real_count}).")
+    fake_count = sum(1 for _, label in train_dataset_full.samples if label == 0)
+    real_count = sum(1 for _, label in train_dataset_full.samples if label == 1)
+    print(f"Loaded {len(train_dataset_full)} images (Fake: {fake_count}, Real: {real_count}).")
     
     # 80/20 split
-    train_size = int(0.8 * len(dataset))
-    val_size = len(dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+    train_size = int(0.8 * len(train_dataset_full))
+    val_size = len(train_dataset_full) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(train_dataset_full, [train_size, val_size])
+    
+    # Create a wrapper that applies val_transform to the validation split
+    class TransformSubset(torch.utils.data.Dataset):
+        """Wraps a Subset to override the parent dataset's transform."""
+        def __init__(self, subset, transform):
+            self.subset = subset
+            self.transform = transform
+        def __len__(self):
+            return len(self.subset)
+        def __getitem__(self, idx):
+            img_path, label = self.subset.dataset.samples[self.subset.indices[idx]]
+            image = Image.open(img_path).convert('RGB')
+            if self.transform:
+                image = self.transform(image)
+            return image, label
+    
+    # Replace the val split with one that uses val_transform (no augmentation)
+    val_dataset = TransformSubset(val_dataset, val_transform)
+    
+    # Collate function that skips corrupted images
+    def safe_collate(batch):
+        batch = [b for b in batch if b is not None]
+        if len(batch) == 0:
+            return torch.zeros((1, 3, 224, 224)), torch.zeros(1, dtype=torch.long)
+        return torch.utils.data.dataloader.default_collate(batch)
     
     # Weighted Random Sampling for class balance in training
     # This ensures each batch has roughly equal real/fake despite any dataset imbalance
     train_indices = train_dataset.indices
-    train_labels = [dataset.samples[i][1] for i in train_indices]
+    train_labels = [train_dataset_full.samples[i][1] for i in train_indices]
     class_counts = [train_labels.count(0), train_labels.count(1)]  # [fake_count, real_count]
     class_weights = [1.0 / c if c > 0 else 0 for c in class_counts]
     sample_weights = [class_weights[label] for label in train_labels]
@@ -363,8 +394,8 @@ if __name__ == '__main__':
     print(f"Class balance — Train: Fake={class_counts[0]}, Real={class_counts[1]}")
     print(f"Using WeightedRandomSampler for balanced batches.")
     
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=sampler, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, sampler=sampler, num_workers=0, collate_fn=safe_collate)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, collate_fn=safe_collate)
     
     print("Initializing STCA-Net architecture...")
     model = STCANet().to(device)

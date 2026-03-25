@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Upload an image to detect deepfakes using STCA-Net's cross-attention and frequency analysis.">
     <title>Image Analysis - STCA Net</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
@@ -74,15 +75,20 @@
             <!-- Upload View -->
             <div class="card">
                 <form id="uploadForm" action="/image-detect" method="POST" enctype="multipart/form-data">
-                    <div class="upload-area" id="uploadBox" onclick="document.getElementById('imageFile').click()">
+                    <div class="upload-area" id="uploadBox">
                         <div class="upload-icon">
                             <i class="fas fa-image"></i>
                         </div>
                         <h3>Upload Image</h3>
-                        <p class="text-muted mt-4">Click here to browse files (JPG/PNG)</p>
+                        <p class="text-muted mt-4">Drag & drop or click to browse (JPG/PNG)</p>
                     </div>
                     
                     <input type="file" id="imageFile" name="image" class="file-input" accept="image/jpeg,image/png">
+                    
+                    <div id="previewContainer" class="preview-container hidden"></div>
+                    <div id="fileSizeWarning" class="file-size-warning">
+                        <i class="fas fa-exclamation-triangle"></i> File is too large. Maximum size is 500 MB.
+                    </div>
                     
                     <button type="submit" id="submitBtn" class="btn btn-primary hidden" style="width: 100%;">
                         Start Analysis
@@ -106,33 +112,73 @@
     </footer>
 
     <script>
+        const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
         const fileInput = document.getElementById('imageFile');
         const uploadBox = document.getElementById('uploadBox');
         const submitBtn = document.getElementById('submitBtn');
         const uploadForm = document.getElementById('uploadForm');
         const loadingState = document.getElementById('loadingState');
+        const previewContainer = document.getElementById('previewContainer');
+        const fileSizeWarning = document.getElementById('fileSizeWarning');
 
-        // Show filename and submit button when file is selected
-        if (fileInput) {
-            fileInput.addEventListener('change', function(e) {
-                if (e.target.files.length > 0) {
-                    const fileName = e.target.files[0].name;
-                    uploadBox.innerHTML = `
-                        <div class="upload-icon" style="color: var(--primary-color);">
-                            <i class="fas fa-file-image"></i>
-                        </div>
-                        <h3 style="color: var(--primary-color);">${fileName}</h3>
-                        <p class="text-muted mt-4">Ready for analysis</p>
-                    `;
-                    uploadBox.style.borderColor = 'var(--primary-color)';
-                    submitBtn.classList.remove('hidden');
+        function handleFile(file) {
+            if (!file) return;
+            
+            // Client-side file size validation
+            if (file.size > MAX_FILE_SIZE) {
+                fileSizeWarning.classList.add('visible');
+                submitBtn.classList.add('hidden');
+                return;
+            }
+            fileSizeWarning.classList.remove('visible');
+            
+            uploadBox.innerHTML = `
+                <div class="upload-icon" style="color: var(--primary-color);">
+                    <i class="fas fa-file-image"></i>
+                </div>
+                <h3 style="color: var(--primary-color);">${file.name}</h3>
+                <p class="text-muted mt-4">Ready for analysis (${(file.size / 1024 / 1024).toFixed(1)} MB)</p>
+            `;
+            uploadBox.style.borderColor = 'var(--primary-color)';
+            submitBtn.classList.remove('hidden');
+            
+            // Show image preview
+            const url = URL.createObjectURL(file);
+            previewContainer.innerHTML = `<img src="${url}" alt="Preview">`;
+            previewContainer.classList.remove('hidden');
+        }
+
+        if (uploadBox) {
+            // Click to browse
+            uploadBox.addEventListener('click', () => fileInput.click());
+            
+            // Drag and drop
+            uploadBox.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadBox.classList.add('dragover');
+            });
+            uploadBox.addEventListener('dragleave', () => {
+                uploadBox.classList.remove('dragover');
+            });
+            uploadBox.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadBox.classList.remove('dragover');
+                if (e.dataTransfer.files.length > 0) {
+                    fileInput.files = e.dataTransfer.files;
+                    handleFile(e.dataTransfer.files[0]);
                 }
             });
+        }
 
-            // Show loading animation on submit
-            uploadForm.addEventListener('submit', function() {
-                uploadBox.classList.add('hidden');
+        if (fileInput) {
+            fileInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) handleFile(e.target.files[0]);
+            });
+
+            uploadForm.addEventListener('submit', () => {
+                if (uploadBox) uploadBox.classList.add('hidden');
                 submitBtn.classList.add('hidden');
+                if (previewContainer) previewContainer.classList.add('hidden');
                 loadingState.classList.remove('hidden');
             });
         }

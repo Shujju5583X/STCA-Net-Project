@@ -3,56 +3,9 @@ import os
 import logging
 from PIL import Image
 
+from utils.face_detection import get_face_cascade, extract_face
+
 logger = logging.getLogger(__name__)
-
-# Use Haar Cascades (fastest for CPU, good enough for most front-facing videos)
-CASCADE_PATH = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-
-def get_face_cascade():
-    """Load the Haar cascade classifier."""
-    cascade = cv2.CascadeClassifier(CASCADE_PATH)
-    if cascade.empty():
-        logger.error("Failed to load Haar cascade classifier.")
-        raise FileNotFoundError("Haar cascade XML file not found.")
-    return cascade
-
-def extract_face(image_array, cascade):
-    """
-    Detects the largest face in an image array and returns the cropped face as a PIL Image.
-    If no face is found, returns the center crop of the image.
-    """
-    # Convert to grayscale for Haar Cascade
-    gray = cv2.cvtColor(image_array, cv2.COLOR_RGB2GRAY)
-    
-    # Detect faces
-    faces = cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(60, 60)
-    )
-    
-    if len(faces) == 0:
-        # No face found, fallback to center crop
-        h, w = image_array.shape[:2]
-        size = min(h, w)
-        y1, x1 = (h - size) // 2, (w - size) // 2
-        cropped = image_array[y1:y1+size, x1:x1+size]
-        return Image.fromarray(cropped)
-        
-    # Find the largest face by area
-    largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
-    x, y, w, h = largest_face
-    
-    # Add a slight margin (20%) around the face to capture context
-    margin_w, margin_h = int(w * 0.2), int(h * 0.2)
-    x1 = max(0, x - margin_w)
-    y1 = max(0, y - margin_h)
-    x2 = min(image_array.shape[1], x + w + margin_w)
-    y2 = min(image_array.shape[0], y + h + margin_h)
-    
-    cropped = image_array[y1:y2, x1:x2]
-    return Image.fromarray(cropped)
 
 def extract_frames_from_video(video_path, max_frames=15, output_dir=None):
     """
@@ -122,7 +75,7 @@ def extract_frames_from_video(video_path, max_frames=15, output_dir=None):
         if best_frame is not None:
             # We found the sharpest frame in this interval, now extract the face
             rgb_frame = cv2.cvtColor(best_frame, cv2.COLOR_BGR2RGB)
-            face_img = extract_face(rgb_frame, cascade)
+            face_img, _ = extract_face(rgb_frame, cascade)
             
             if face_img is not None:
                 extracted_images.append(face_img)

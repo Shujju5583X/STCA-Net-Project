@@ -7,6 +7,8 @@ from torchvision import transforms
 from PIL import Image
 from scipy.fft import dctn
 
+from utils.face_detection import extract_face as extract_face_from_image
+
 logger = logging.getLogger(__name__)
 
 # Setup standard ImageNet normalization since MobileNet and ViT both expect it
@@ -15,60 +17,6 @@ preprocess_transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
-
-# Load Haar cascade once at module level
-CASCADE_PATH = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-_face_cascade = None
-
-def _get_face_cascade():
-    """Lazily load the Haar cascade classifier."""
-    global _face_cascade
-    if _face_cascade is None:
-        _face_cascade = cv2.CascadeClassifier(CASCADE_PATH)
-        if _face_cascade.empty():
-            logger.error("Failed to load Haar cascade classifier.")
-            raise FileNotFoundError("Haar cascade XML file not found.")
-    return _face_cascade
-
-
-def extract_face_from_image(pil_image):
-    """
-    Detect and crop the largest face from a PIL Image.
-    Returns (cropped_face_pil, face_found_bool).
-    If no face is found, returns a center crop.
-    """
-    img_array = np.array(pil_image)
-    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-    
-    cascade = _get_face_cascade()
-    faces = cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=5,
-        minSize=(60, 60)
-    )
-    
-    if len(faces) == 0:
-        # No face found — center crop as fallback
-        h, w = img_array.shape[:2]
-        size = min(h, w)
-        y1, x1 = (h - size) // 2, (w - size) // 2
-        cropped = img_array[y1:y1+size, x1:x1+size]
-        return Image.fromarray(cropped), False
-    
-    # Find the largest face by area
-    largest_face = max(faces, key=lambda rect: rect[2] * rect[3])
-    x, y, w, h = largest_face
-    
-    # Add 20% margin around the face for context
-    margin_w, margin_h = int(w * 0.2), int(h * 0.2)
-    x1 = max(0, x - margin_w)
-    y1 = max(0, y - margin_h)
-    x2 = min(img_array.shape[1], x + w + margin_w)
-    y2 = min(img_array.shape[0], y + h + margin_h)
-    
-    cropped = img_array[y1:y2, x1:x2]
-    return Image.fromarray(cropped), True
 
 
 def compute_frequency_score(pil_image):
@@ -347,41 +295,56 @@ def predict_image(model, image_path, device='cpu'):
 
 def predict_video_frames(model, frames, device='cpu'):
     """
-    Takes a list of PIL Images (extracted frames), predicts each one, 
-    and aggregates the overall prediction.
+    Takes a list of PIL Images (extracted frames), predicts using
+    temporal aggregation (LSTM over per-frame embeddings) when available.
+    Falls back to averaging if temporal forward is not supported.
     """
     if not frames:
         raise ValueError("No frames provided for prediction.")
         
-    fake_scores = []
-    real_scores = []
     freq_scores = []
+    frame_embeddings = []
     
     model.eval()
     with torch.no_grad():
         for frame in frames:
             # frame is a PIL Image (already face-cropped from video_processing)
             input_tensor = preprocess_transform(frame).unsqueeze(0).to(device)
-            output, _ = model(input_tensor)
             
-            probabilities = torch.nn.functional.softmax(output[0], dim=0)
-            fake_scores.append(probabilities[0].item())
-            real_scores.append(probabilities[1].item())
+            # Extract per-frame embedding
+            embedding, _ = model.extract_embedding(input_tensor)  # (1, d_model)
+            frame_embeddings.append(embedding)
             
             # Also compute frequency score for each frame
             freq_scores.append(compute_frequency_score(frame))
-            
-    # Aggregate neural network scores (Average)
-    avg_nn_fake = sum(fake_scores) / len(fake_scores)
-    avg_nn_real = sum(real_scores) / len(real_scores)
+        
+        # Stack all frame embeddings into temporal sequence: (1, T, d_model)
+        temporal_sequence = torch.stack(frame_embeddings, dim=1)
+        
+        # Use temporal aggregation (LSTM) for video-level prediction
+        try:
+            temporal_output = model.forward_temporal(temporal_sequence)  # (1, num_classes)
+            probabilities = torch.nn.functional.softmax(temporal_output[0], dim=0)
+        except (AttributeError, RuntimeError):
+            # Fallback: average per-frame predictions if temporal model not available
+            logger.warning("Temporal aggregation not available, falling back to averaging.")
+            all_probs = []
+            for emb in frame_embeddings:
+                output = model.classifier(emb)
+                all_probs.append(torch.nn.functional.softmax(output[0], dim=0))
+            probabilities = torch.stack(all_probs).mean(dim=0)
+        
+        nn_fake_prob = probabilities[0].item()
+        nn_real_prob = probabilities[1].item()
+    
     avg_freq = sum(freq_scores) / len(freq_scores)
     
-    # Combine with frequency analysis (same weighting as image)
+    # Combine with frequency analysis
     nn_weight = 0.70
     freq_weight = 0.30
     
-    combined_fake = (avg_nn_fake * nn_weight) + (avg_freq * freq_weight)
-    combined_real = (avg_nn_real * nn_weight) + ((1 - avg_freq) * freq_weight)
+    combined_fake = (nn_fake_prob * nn_weight) + (avg_freq * freq_weight)
+    combined_real = (nn_real_prob * nn_weight) + ((1 - avg_freq) * freq_weight)
     
     total = combined_fake + combined_real
     combined_fake /= total
@@ -401,3 +364,4 @@ def predict_video_frames(model, frames, device='cpu'):
         'real_probability': round(avg_real_prob, 2),
         'frequency_score': round(avg_freq * 100, 2),
     }
+

@@ -3,7 +3,16 @@ import time
 import logging
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 from werkzeug.utils import secure_filename
+from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import torch
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from models.stca_net import STCANet
 from utils.video_processing import extract_frames_from_video
@@ -15,7 +24,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'stca_net_super_secret_key'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-fallback-change-in-production')
+
+# Enable CORS for API access from separate frontends
+CORS(app)
+
+# Rate limiting to prevent abuse
+limiter = Limiter(get_remote_address, app=app, default_limits=['200 per day', '50 per hour'])
 app.config['UPLOAD_FOLDER'] = 'Uploaded_Files'
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB max upload
 
@@ -45,6 +60,11 @@ def load_stca_weights():
 
 # Attempt to load weights on startup
 load_stca_weights()
+
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Docker/Render monitoring."""
+    return jsonify({'status': 'healthy', 'model_loaded': os.path.exists(MODEL_PATH)}), 200
 
 @app.route('/')
 def index():

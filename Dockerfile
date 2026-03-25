@@ -1,26 +1,33 @@
-# Use an official Python runtime as a parent image
+# ---- Build Stage ----
+FROM python:3.10-slim AS builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update -y && \
+    apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ---- Runtime Stage ----
 FROM python:3.10-slim
 
-# Set the working directory inside the container
 WORKDIR /app
 
-# Update the package list and install system dependencies
+# Install only runtime system dependencies (OpenCV needs these)
 RUN apt-get update -y && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
     libopenblas-dev \
-    liblapack-dev \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    libx11-6 \
-    libxext6 \
-    libxrender1 \
-    libxinerama1 \
-    libxi6 \
-    mesa-common-dev \
-    libegl1-mesa \
-    libegl1-mesa-dev \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
+
+# Copy installed Python packages from builder
+COPY --from=builder /install /usr/local
 
 # Set environment variables for CPU operation
 ENV MEDIAPIPE_DISABLE_GPU=1
@@ -28,17 +35,16 @@ ENV KMP_DUPLICATE_LIB_OK=True
 ENV OMP_NUM_THREADS=4
 ENV MKL_NUM_THREADS=4
 ENV OPENBLAS_NUM_THREADS=4
-ENV NUMEXPR_NUM_THREADS=4
-ENV VECLIB_MAXIMUM_THREADS=4
 
-# Copy the current directory contents into the container
+# Copy application code
 COPY . /app
 
-# Install any needed packages specified in requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Expose the port that the application will run on (optional)
+# Expose the port that the application will run on
 EXPOSE 10000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:10000/health')" || exit 1
 
 # Run the application
 CMD ["python", "server.py"]

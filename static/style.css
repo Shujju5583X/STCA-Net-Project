@@ -15,6 +15,23 @@
     --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
 }
 
+/* Dark Mode */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --primary-color: #818cf8;
+        --primary-hover: #6366f1;
+        --secondary-color: #f1f5f9;
+        --bg-color: #0f172a;
+        --card-bg: #1e293b;
+        --text-main: #f1f5f9;
+        --text-muted: #94a3b8;
+        --danger-color: #f87171;
+        --success-color: #34d399;
+        --border-color: #334155;
+        --shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.2);
+    }
+}
+
 * {
     box-sizing: border-box;
     margin: 0;
@@ -150,14 +167,15 @@ main {
     padding: 3rem 2rem;
     text-align: center;
     cursor: pointer;
-    transition: border-color 0.2s, background-color 0.2s;
+    transition: border-color 0.2s, background-color 0.2s, transform 0.2s;
     margin-bottom: 1.5rem;
     background-color: var(--bg-color);
 }
 
 .upload-area:hover, .upload-area.dragover {
     border-color: var(--primary-color);
-    background-color: #eff6ff;
+    background-color: rgba(79, 70, 229, 0.05);
+    transform: scale(1.01);
 }
 
 .upload-icon {
@@ -168,6 +186,21 @@ main {
 
 .file-input {
     display: none;
+}
+
+/* Image/Video Preview */
+.preview-container {
+    margin: 1rem 0;
+    text-align: center;
+}
+
+.preview-container img,
+.preview-container video {
+    max-width: 100%;
+    max-height: 300px;
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    object-fit: contain;
 }
 
 /* Results display */
@@ -224,9 +257,22 @@ main {
     color: var(--text-muted);
 }
 
+/* File size warning */
+.file-size-warning {
+    color: var(--danger-color);
+    font-weight: 600;
+    margin: 0.5rem 0;
+    display: none;
+}
+
+.file-size-warning.visible {
+    display: block;
+}
+
 /* Utilities */
 .hidden { display: none !important; }
 .text-center { text-align: center; }
+.text-muted { color: var(--text-muted); }
 .mt-4 { margin-top: 1rem; }
 .mb-4 { margin-bottom: 1rem; }
 
@@ -253,4 +299,45 @@ footer {
     text-align: center;
     padding: 2rem 0;
     margin-top: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+    footer {
+        background-color: #020617;
+        color: var(--text-muted);
+    }
+    
+    .btn-secondary:hover {
+        background-color: #475569;
+    }
+    
+    .result-badge.fake {
+        background-color: rgba(239, 68, 68, 0.15);
+        border-color: rgba(239, 68, 68, 0.4);
+    }
+    
+    .result-badge.real {
+        background-color: rgba(16, 185, 129, 0.15);
+        border-color: rgba(16, 185, 129, 0.4);
+    }
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+    .hero h1 {
+        font-size: 1.75rem;
+    }
+    
+    .nav-links a {
+        margin-left: 0.75rem;
+        font-size: 0.9rem;
+    }
+    
+    .card {
+        padding: 1.5rem;
+    }
+    
+    .upload-area {
+        padding: 2rem 1rem;
+    }
 }
