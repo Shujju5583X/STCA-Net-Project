@@ -90,31 +90,48 @@ def extract_frames_from_video(video_path, max_frames=15, output_dir=None):
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
         
-    frame_count = 0
-    saved_count = 0
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret or saved_count >= max_frames:
-            break
+    for i in range(max_frames):
+        start_frame = i * interval
+        end_frame = min((i + 1) * interval, total_frames)
+        
+        best_frame = None
+        max_sharpness = -1.0
+        
+        # Sample up to 'sample_limit' frames within this interval to find the sharpest one
+        # Avoid processing every single frame for long videos to maintain performance
+        sample_limit = min(5, end_frame - start_frame)
+        if sample_limit < 1:
+            continue
             
-        if frame_count % interval == 0:
-            # Convert BGR (OpenCV) to RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-            # Extract face
-            face_img = extract_face(rgb_frame, cascade)
-            extracted_images.append(face_img)
-            
-            # Save to disk if output_dir is provided (mostly for debugging/UI)
-            if output_dir:
-                save_path = os.path.join(output_dir, f"frame_{saved_count:04d}.jpg")
-                face_img.save(save_path)
+        step = max(1, (end_frame - start_frame) // sample_limit)
+        
+        for f in range(start_frame, end_frame, step):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, f)
+            ret, frame = cap.read()
+            if not ret:
+                break
                 
-            saved_count += 1
+            # Convert to gray to check sharpness using Variance of Laplacian
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
             
-        frame_count += 1
+            if sharpness > max_sharpness:
+                max_sharpness = sharpness
+                best_frame = frame
+                
+        if best_frame is not None:
+            # We found the sharpest frame in this interval, now extract the face
+            rgb_frame = cv2.cvtColor(best_frame, cv2.COLOR_BGR2RGB)
+            face_img = extract_face(rgb_frame, cascade)
+            
+            if face_img is not None:
+                extracted_images.append(face_img)
+                
+                # Save to disk if output_dir is provided
+                if output_dir:
+                    save_path = os.path.join(output_dir, f"frame_{len(extracted_images):04d}.jpg")
+                    face_img.save(save_path)
         
     cap.release()
-    logger.info(f"Extracted {len(extracted_images)} face frames from video.")
+    logger.info(f"Extracted {len(extracted_images)} smart-selected face frames from video.")
     return extracted_images

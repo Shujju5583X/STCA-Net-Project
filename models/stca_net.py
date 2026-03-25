@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
+import torch.fft
 
 class STCANet(nn.Module):
     """
@@ -45,7 +46,21 @@ class STCANet(nn.Module):
         # We use the Transformer's CLS token to attend back to the original CNN spatial maps
         self.cross_attention = nn.MultiheadAttention(embed_dim=d_model, num_heads=nhead, batch_first=True)
         
-        # 4. Classification Head
+        # 4. Frequency Domain Extractor
+        # Extracts features from the FFT magnitude spectrum of the input
+        self.freq_extractor = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=5, stride=2, padding=2),
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=5, stride=2, padding=2),
+            nn.BatchNorm2d(64),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Flatten(),
+            nn.Linear(64, d_model)
+        )
+        
+        # 5. Classification Head
         self.classifier = nn.Sequential(
             nn.Linear(d_model, 128),
             nn.LayerNorm(128),
@@ -81,6 +96,18 @@ class STCANet(nn.Module):
         
         # Extract the processed CLS token (global context summary)
         global_context = transformer_output[:, 0:1, :] # (B, 1, 256)
+        
+        # Step 2.5: Frequency Domain Injection
+        # Compute 2D FFT (Fast Fourier Transform) magnitude spectrum
+        freq_complex = torch.fft.fft2(x, norm='ortho')
+        freq_mag = torch.abs(freq_complex)
+        
+        # Extract frequency features
+        freq_feat = self.freq_extractor(freq_mag) # (B, 256)
+        freq_feat = freq_feat.unsqueeze(1) # (B, 1, 256)
+        
+        # Fuse frequency-domain context into our spatial-global context before cross-attention
+        global_context = global_context + freq_feat
         
         # Step 3: Cross-Attention Fusion
         # Query: Global Context (Transformer), Key/Value: Local Features (CNN)
