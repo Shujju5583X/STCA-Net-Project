@@ -40,7 +40,7 @@ os.makedirs('static', exist_ok=True) # Ensure static dir exists
 
 # Global Model Definition (Lazy Load ready)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-MODEL_PATH = "model/stca_net_weights.pt"
+MODEL_PATH = "models/stca_net_weights.pt"
 
 logger.info(f"Flask App Initializing. Target Device: {device}")
 
